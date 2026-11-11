@@ -80,7 +80,7 @@
         <label>Tax <input id="tax" class="num" type="number" min="0" step="0.01" value="0"></label>
         <label>Tip <input id="tip" class="num" type="number" min="0" step="0.01" value="0"></label>
       </div>
-      <p class="note">Tap names to choose who shared an item. No selection means everyone splits it. Tax and tip are split in proportion.</p>
+      <p class="note">Tap names to choose who ordered each item (select several to share it). An item with nobody selected is not charged to anyone. Tax and tip are split in proportion to what each person ordered.</p>
     </section>
 
     <section class="card">
@@ -197,6 +197,22 @@
         };
         chips.appendChild(b);
       });
+      if (state.people.length > 1) {
+        var all = document.createElement('button');
+        var everyone = it.assignees.length === state.people.length;
+        all.className = 'chip' + (everyone ? ' on' : '');
+        all.textContent = 'Everyone';
+        all.onclick = function () {
+          it.assignees = everyone ? [] : state.people.map(function (_, i) { return i; });
+          renderAll();
+        };
+        chips.insertBefore(all, chips.firstChild);
+      }
+      if (state.people.length && !it.assignees.length) {
+        var hint = document.createElement('span');
+        hint.className = 'note'; hint.style.margin = '0 0 0 4px'; hint.textContent = 'not charged to anyone yet';
+        chips.appendChild(hint);
+      }
       wrap.appendChild(chips);
       box.appendChild(wrap);
     });
@@ -216,7 +232,7 @@
       return '<div class="total"><span>' + esc(name) + (i === state.payer ? ' <span class="note">(already paid)</span>' : '') +
         '</span><strong>' + money(s[i].total) + '</strong></div>';
     }).join('');
-    $('shares').innerHTML = html + '<div class="total"><span class="note">Bill total</span><span class="note">' + money(sum) + '</span></div>';
+    $('shares').innerHTML = html + '<div class="total"><span class="note">Total assigned</span><span class="note">' + money(sum) + '</span></div>';
   }
 
   function renderAll() { renderPeople(); renderItems(); renderShares(); }
@@ -333,7 +349,7 @@
     var warn = [];
     if (!c.paypal) warn.push('PayPal credentials not detected. Put PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET in the .env file (named exactly ".env", next to server.js), then stop the app with Ctrl+C and run npm start again.');
     if (!c.ai) warn.push('Gemini key not detected, so receipts cannot be scanned yet. Put GEMINI_API_KEY in the .env file and restart the app.');
-    if (!c.envFound) warn.push('No .env file was found at all.');
+    if (!c.envFound && (!c.paypal || !c.ai)) warn.push('No .env file was found. On a hosted site, set the keys as environment variables instead.');
     $('banner').innerHTML = warn.map(esc).join('<br><br>');
     $('banner').classList.toggle('hidden', warn.length === 0);
     renderAll();
