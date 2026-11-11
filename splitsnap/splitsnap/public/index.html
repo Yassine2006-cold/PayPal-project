@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SplitSnap</title>
+<style>
+  :root { --bg:#f6f7fb; --card:#fff; --ink:#14213d; --mute:#6b7280; --brand:#0070e0; --ok:#12a150; --warn:#b45309; --line:#e5e7eb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width:760px; margin:0 auto; padding:20px 16px 60px; }
+  h1 { margin:8px 0 2px; font-size:28px; } h1 span { color:var(--brand); }
+  .sub { color:var(--mute); margin:0 0 18px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
+  h2 { font-size:17px; margin:0 0 10px; }
+  button { font:inherit; border:0; border-radius:10px; padding:10px 14px; cursor:pointer; background:var(--brand); color:#fff; }
+  button.ghost { background:#eef2f7; color:var(--ink); } button:disabled { opacity:.5; cursor:default; }
+  input, select { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:8px; min-width:0; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .item { border-top:1px solid var(--line); padding:10px 0; }
+  .item:first-child { border-top:0; }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .chip { padding:4px 10px; border-radius:999px; background:#eef2f7; color:var(--ink); font-size:14px; }
+  .chip.on { background:var(--brand); color:#fff; }
+  .name { flex:1 1 160px; } .num { width:84px; }
+  .badge { padding:2px 10px; border-radius:999px; font-size:13px; background:#eef2f7; }
+  .badge.paid { background:#dcfce7; color:var(--ok); } .badge.pending { background:#fef3c7; color:var(--warn); } .badge.failed { background:#fee2e2; color:#b91c1c; }
+  .total { display:flex; justify-content:space-between; padding:6px 0; }
+  .err { color:#b91c1c; margin:8px 0 0; } .note { color:var(--mute); font-size:14px; }
+  .hidden { display:none; }
+  .linkbox { width:100%; font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Split<span>Snap</span></h1>
+  <p class="sub">Snap the receipt. AI reads it. Everyone gets a PayPal link for their share.</p>
+  <div id="banner" class="note"></div>
+
+  <div id="builder">
+    <section class="card">
+      <h2>1. Receipt</h2>
+      <div class="row">
+        <input type="file" id="file" accept="image/*">
+        <button class="ghost" id="manual">Enter items manually</button>
+      </div>
+      <p class="note" id="parseNote"></p>
+    </section>
+
+    <section class="card">
+      <h2>2. People</h2>
+      <div class="row" id="people"></div>
+      <div class="row" style="margin-top:8px">
+        <input id="newPerson" placeholder="Add a person" maxlength="40">
+        <button class="ghost" id="addPerson">Add</button>
+      </div>
+      <p class="note">The first person paid the bill and receives the money.</p>
+    </section>
+
+    <section class="card">
+      <h2>3. Items</h2>
+      <div class="row" style="margin-bottom:8px">
+        <input id="title" class="name" placeholder="Bill title" maxlength="60" value="Group dinner">
+        <select id="currency"></select>
+      </div>
+      <div id="items"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" id="addItem">+ Add item</button>
+        <label>Tax <input id="tax" class="num" type="number" min="0" step="0.01" value="0"></label>
+        <label>Tip <input id="tip" class="num" type="number" min="0" step="0.01" value="0"></label>
+      </div>
+      <p class="note">Tap names to choose who shared an item. No selection means everyone splits it. Tax and tip are split in proportion.</p>
+    </section>
+
+    <section class="card">
+      <h2>4. Shares</h2>
+      <div id="shares"></div>
+      <button id="create" style="margin-top:10px">Create PayPal payment requests</button>
+      <p class="err" id="err"></p>
+    </section>
+  </div>
+
+  <section class="card hidden" id="result">
+    <h2 id="resTitle"></h2>
+    <div id="resList"></div>
+    <p class="note">Sandbox mode: pay with a PayPal sandbox personal account. Status updates automatically.</p>
+    <button class="ghost" id="again">Split another bill</button>
+  </section>
+</main>
+
+<script src="/split.js"></script>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+  const state = { people: ['Me', 'Friend 1'], items: [], config: {} };
+  let poll = null;
+
+  const money = (c) => (c / 100).toFixed(2) + ' ' + $('currency').value;
+  const toCents = (x) => Math.max(0, Math.round(Number(x) * 100) || 0);
+
+  function renderPeople() {
+    $('people').innerHTML = state.people.map((n, i) =>
+      `<span class="chip on">${esc(n)}${i > 1 ? ` <a href="#" data-rm="${i}" style="color:#fff">×</a>` : ''}</span>`).join('');
+    $('people').querySelectorAll('[data-rm]').forEach((a) => a.onclick = (e) => {
+      e.preventDefault();
+      const i = Number(a.dataset.rm);
+      state.people.splice(i, 1);
+      state.items.forEach((it) => it.assignees = it.assignees.filter((p) => p !== i).map((p) => p > i ? p - 1 : p));
+      renderAll();
+    });
+  }
+
+  function renderItems() {
+    $('items').innerHTML = state.items.map((it, k) => `
+      <div class="item">
+        <div class="row">
+          <input class="name" data-k="${k}" data-f="name" value="${esc(it.name)}" maxlength="80">
+          <input class="num" data-k="${k}" data-f="qty" type="number" min="1" step="1" value="${it.qty}" title="Quantity">
+          <input class="num" data-k="${k}" data-f="price" type="number" min="0" step="0.01" value="${it.price}" title="Unit price">
+          <button class="ghost" data-del="${k}">✕</button>
+        </div>
+        <div class="chips">${state.people.map((n, i) =>
+          `<button class="chip ${it.assignees.includes(i) ? 'on' : ''}" data-k="${k}" data-p="${i}">${esc(n)}</button>`).join('')}</div>
+      </div>`).join('') || '<p class="note">No items yet.</p>';
+    $('items').querySelectorAll('input').forEach((el) => el.oninput = () => {
+      const it = state.items[el.dataset.k], f = el.dataset.f;
+      it[f] = f === 'name' ? el.value : Number(el.value) || 0;
+      renderShares();
+    });
+    $('items').querySelectorAll('[data-del]').forEach((b) => b.onclick = () => { state.items.splice(Number(b.dataset.del), 1); renderAll(); });
+    $('items').querySelectorAll('[data-p]').forEach((b) => b.onclick = () => {
+      const it = state.items[b.dataset.k], p = Number(b.dataset.p);
+      it.assignees = it.assignees.includes(p) ? it.assignees.filter((x) => x !== p) : [...it.assignees, p];
+      renderAll();
+    });
+  }
+
+  function shares() {
+    return Split.computeShares({
+      items: state.items.map((it) => ({ qty: it.qty, unitCents: toCents(it.price), assignees: it.assignees })),
+      taxCents: toCents($('tax').value), tipCents: toCents($('tip').value), peopleCount: state.people.length,
+    });
+  }
+
+  function renderShares() {
+    const s = shares();
+    $('shares').innerHTML = state.people.map((n, i) =>
+      `<div class="total"><span>${esc(n)}${i === 0 ? ' <span class="note">(paid)</span>' : ''}</span><strong>${money(s[i].total)}</strong></div>`).join('') +
+      `<div class="total"><span class="note">Bill total</span><span class="note">${money(s.reduce((a, x) => a + x.total, 0))}</span></div>`;
+  }
+
+  function renderAll() { renderPeople(); renderItems(); renderShares(); }
+
+  function fileToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image(), fr = new FileReader();
+      fr.onload = () => { img.src = fr.result; };
+      img.onload = () => {
+        const sc = Math.min(1, 1600 / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = fr.onerror = () => reject(new Error('Could not read that image.'));
+      fr.readAsDataURL(file);
+    });
+  }
+
+  $('file').onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    $('parseNote').textContent = 'Reading receipt with AI…'; $('err').textContent = '';
+    try {
+      const image = await fileToDataUrl(f);
+      const r = await fetch('/api/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image }) });
+      const j = await r.json(); if (!r.ok) throw new Error(j.error);
+      state.items = j.items.map((it) => ({ name: it.name, qty: it.qty, price: it.price, assignees: [] }));
+      $('tax').value = j.tax; $('tip').value = j.tip;
+      if (j.currency) $('currency').value = j.currency;
+      if (j.merchant) $('title').value = j.merchant;
+      $('parseNote').textContent = j.demo
+        ? 'No ANTHROPIC_API_KEY set: loaded a demo receipt. Add a key to read real photos.'
+        : `Found ${j.items.length} items. Check them and assign people.`;
+      renderAll();
+    } catch (err) { $('parseNote').textContent = ''; $('err').textContent = err.message; }
+  };
+
+  $('manual').onclick = () => { if (!state.items.length) state.items.push({ name: '', qty: 1, price: 0, assignees: [] }); renderAll(); };
+  $('addItem').onclick = () => { state.items.push({ name: '', qty: 1, price: 0, assignees: [] }); renderAll(); };
+  $('addPerson').onclick = () => {
+    const v = $('newPerson').value.trim().slice(0, 40);
+    if (v && state.people.length < 12) { state.people.push(v); $('newPerson').value = ''; renderAll(); }
+  };
+  $('newPerson').onkeydown = (e) => { if (e.key === 'Enter') $('addPerson').click(); };
+  $('tax').oninput = $('tip').oninput = renderShares;
+  $('currency').onchange = renderShares;
+
+  $('create').onclick = async () => {
+    $('err').textContent = ''; $('create').disabled = true;
+    try {
+      const r = await fetch('/api/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+        title: $('title').value, currency: $('currency').value, people: state.people, tax: Number($('tax').value) || 0,
+        tip: Number($('tip').value) || 0, items: state.items,
+      }) });
+      const j = await r.json(); if (!r.ok) throw new Error(j.error);
+      history.replaceState(null, '', '/?bill=' + j.id);
+      showBill(j.id);
+    } catch (err) { $('err').textContent = err.message; }
+    $('create').disabled = false;
+  };
+
+  async function showBill(id) {
+    const r = await fetch('/api/bills/' + id);
+    if (!r.ok) { history.replaceState(null, '', '/'); return; }
+    const b = await r.json();
+    $('builder').classList.add('hidden'); $('result').classList.remove('hidden');
+    $('resTitle').textContent = b.title;
+    const cur = b.currency;
+    $('resList').innerHTML = b.people.map((p) => {
+      const label = p.isOwner ? 'paid the bill' : p.status;
+      const cls = p.status === 'paid' ? 'paid' : p.status === 'pending' ? 'pending' : p.status === 'failed' ? 'failed' : '';
+      return `<div class="item"><div class="total"><span>${esc(p.name)}</span><span><strong>${(p.totalCents / 100).toFixed(2)} ${esc(cur)}</strong> <span class="badge ${cls}">${esc(label)}</span></span></div>` +
+        (p.payUrl ? `<div class="row"><input class="linkbox" readonly value="${esc(p.payUrl)}"><button class="ghost" data-copy="${esc(p.payUrl)}">Copy</button><a href="${esc(p.payUrl)}" target="_blank" rel="noopener"><button>Pay</button></a></div>` : '') + '</div>';
+    }).join('');
+    $('resList').querySelectorAll('[data-copy]').forEach((btn) => btn.onclick = () => { navigator.clipboard.writeText(btn.dataset.copy); btn.textContent = 'Copied'; });
+    clearTimeout(poll);
+    if (b.people.some((p) => p.status === 'pending')) poll = setTimeout(() => showBill(id), 4000);
+  }
+
+  $('again').onclick = () => { location.href = '/'; };
+
+  (async () => {
+    state.config = await (await fetch('/api/config')).json();
+    $('currency').innerHTML = state.config.currencies.map((c) => `<option>${c}</option>`).join('');
+    const warn = [];
+    if (!state.config.paypal) warn.push('PayPal sandbox credentials are missing (see README).');
+    if (!state.config.ai) warn.push('AI key missing: receipt scan runs in demo mode.');
+    $('banner').textContent = warn.join(' ');
+    renderAll();
+    const id = new URLSearchParams(location.search).get('bill');
+    if (id) showBill(id);
+  })();
+})();
+</script>
+</body>
+</html>
