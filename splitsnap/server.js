@@ -21,7 +21,8 @@ try {
 } catch {}
 
 const PORT = Number(process.env.PORT) || 3000;
-const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
+// On Render, RENDER_EXTERNAL_URL is the public https URL. Set BASE_URL yourself to override.
+const BASE_URL = (process.env.BASE_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
 const PP_BASE = 'https://api-m.sandbox.paypal.com'; // sandbox only
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD'];
@@ -209,6 +210,7 @@ async function createBill(body) {
   const payerN = Number(body.payer);
   const payer = body.payer !== '' && body.payer != null && Number.isInteger(payerN) && payerN >= 0 && payerN < names.length ? payerN : -1;
   const shares = computeShares({ items, taxCents: cents(body.tax), tipCents: cents(body.tip), peopleCount: names.length });
+  if (shares.every((x) => x.total === 0)) throw Object.assign(new Error('Nothing to charge. Select who pays for at least one item.'), { status: 400 });
   const bill = {
     id: crypto.randomBytes(6).toString('hex'),
     title: clean(body.title, 60) || 'Group bill',

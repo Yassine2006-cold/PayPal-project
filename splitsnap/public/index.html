@@ -80,7 +80,7 @@
         <label>Tax <input id="tax" class="num" type="number" min="0" step="0.01" value="0"></label>
         <label>Tip <input id="tip" class="num" type="number" min="0" step="0.01" value="0"></label>
       </div>
-      <p class="note">Tap names to assign each item to the people who ordered it (select several to share it). Leave an item unselected to split its cost equally among everyone on the bill. Tax and tip are split in proportion to each person's assigned items.</p>
+      <p class="note">Every item is split equally between everyone by default. Tap names to charge an item only to those people (select several to share it). To skip an item, tap Everyone off and select nobody: it is not charged. Tax and tip are split in proportion to what each person ordered.</p>
     </section>
 
     <section class="card">
@@ -111,6 +111,7 @@
   var state = { people: [], payer: -1, items: [], config: { currencies: ['USD'] } };
   var poll = null;
 
+  function effective(it) { return it.everyone ? state.people.map(function (_, i) { return i; }) : it.assignees; }
   function toCents(x) { return Math.max(0, Math.round(Number(x) * 100) || 0); }
   function money(c) { return (c / 100).toFixed(2) + ' ' + $('currency').value; }
 
@@ -186,32 +187,33 @@
 
       var chips = document.createElement('div');
       chips.className = 'chips';
-      state.people.forEach(function (n, i) {
-        var b = document.createElement('button');
-        b.className = 'chip' + (it.assignees.indexOf(i) >= 0 ? ' on' : '');
-        b.textContent = n;
-        b.onclick = function () {
-          var at = it.assignees.indexOf(i);
-          if (at >= 0) it.assignees.splice(at, 1); else it.assignees.push(i);
-          renderAll();
-        };
-        chips.appendChild(b);
-      });
-      if (state.people.length > 1) {
+      if (state.people.length) {
         var all = document.createElement('button');
-        var everyone = it.assignees.length === state.people.length;
-        all.className = 'chip' + (everyone ? ' on' : '');
+        all.className = 'chip' + (it.everyone ? ' on' : '');
         all.textContent = 'Everyone';
-        all.onclick = function () {
-          it.assignees = everyone ? [] : state.people.map(function (_, i) { return i; });
-          renderAll();
-        };
-        chips.insertBefore(all, chips.firstChild);
-      }
-      if (state.people.length && !it.assignees.length) {
-        var hint = document.createElement('span');
-        hint.className = 'note'; hint.style.margin = '0 0 0 4px'; hint.textContent = 'shared equally by everyone';
-        chips.appendChild(hint);
+        all.title = 'Split this item equally between everyone. Tap again to select nobody.';
+        all.onclick = function () { it.everyone = !it.everyone; it.assignees = []; renderAll(); };
+        chips.appendChild(all);
+        state.people.forEach(function (n, i) {
+          var b = document.createElement('button');
+          b.className = 'chip' + (!it.everyone && it.assignees.indexOf(i) >= 0 ? ' on' : '');
+          b.textContent = n;
+          b.onclick = function () {
+            if (it.everyone) { it.everyone = false; it.assignees = [i]; }
+            else {
+              var at = it.assignees.indexOf(i);
+              if (at >= 0) it.assignees.splice(at, 1); else it.assignees.push(i);
+              if (it.assignees.length === state.people.length) { it.everyone = true; it.assignees = []; }
+            }
+            renderAll();
+          };
+          chips.appendChild(b);
+        });
+        if (!it.everyone && !it.assignees.length) {
+          var hint = document.createElement('span');
+          hint.className = 'note'; hint.style.margin = '0 0 0 4px'; hint.textContent = 'not charged to anyone';
+          chips.appendChild(hint);
+        }
       }
       wrap.appendChild(chips);
       box.appendChild(wrap);
@@ -223,7 +225,7 @@
     var n = state.people.length;
     if (n === 0) { $('shares').innerHTML = '<p class="note" style="margin:0">Add people to see each share.</p>'; return; }
     var s = Split.computeShares({
-      items: state.items.map(function (it) { return { qty: it.qty, unitCents: toCents(it.price), assignees: it.assignees }; }),
+      items: state.items.map(function (it) { return { qty: it.qty, unitCents: toCents(it.price), assignees: effective(it) }; }),
       taxCents: toCents($('tax').value), tipCents: toCents($('tip').value), peopleCount: n,
     });
     var sum = 0;
@@ -232,7 +234,9 @@
       return '<div class="total"><span>' + esc(name) + (i === state.payer ? ' <span class="note">(already paid)</span>' : '') +
         '</span><strong>' + money(s[i].total) + '</strong></div>';
     }).join('');
-    $('shares').innerHTML = html + '<div class="total"><span class="note">Total assigned</span><span class="note">' + money(sum) + '</span></div>';
+    var skipped = state.items.filter(function (it) { return effective(it).length === 0 && toCents(it.price) > 0; }).length;
+    $('shares').innerHTML = html + '<div class="total"><span class="note">Bill total</span><span class="note">' + money(sum) + '</span></div>' +
+      (skipped ? '<p class="note">' + skipped + (skipped === 1 ? ' item is' : ' items are') + ' not charged to anyone.</p>' : '');
   }
 
   function renderAll() { renderPeople(); renderItems(); renderShares(); }
@@ -258,7 +262,7 @@
 
   function applyParsed(j) {
     state.items = (j.items || []).map(function (it) {
-      return { name: it.name, qty: it.qty, price: it.price, assignees: [] };
+      return { name: it.name, qty: it.qty, price: it.price, everyone: true, assignees: [] };
     });
     $('tax').value = j.tax || 0;
     $('tip').value = j.tip || 0;
@@ -287,10 +291,10 @@
   };
   $('sample').onclick = function () { callParse({ sample: true }); };
   $('manual').onclick = function () {
-    if (!state.items.length) state.items.push({ name: '', qty: 1, price: 0, assignees: [] });
+    if (!state.items.length) state.items.push({ name: '', qty: 1, price: 0, everyone: true, assignees: [] });
     renderAll();
   };
-  $('addItem').onclick = function () { state.items.push({ name: '', qty: 1, price: 0, assignees: [] }); renderAll(); };
+  $('addItem').onclick = function () { state.items.push({ name: '', qty: 1, price: 0, everyone: true, assignees: [] }); renderAll(); };
   $('addPerson').onclick = addPerson;
   $('newPerson').onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); addPerson(); } };
   $('payer').onchange = function () { state.payer = Number($('payer').value); renderShares(); };
@@ -308,7 +312,8 @@
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         title: $('title').value, currency: $('currency').value, people: state.people, payer: state.payer,
-        tax: Number($('tax').value) || 0, tip: Number($('tip').value) || 0, items: state.items,
+        tax: Number($('tax').value) || 0, tip: Number($('tip').value) || 0,
+        items: state.items.map(function (it) { return { name: it.name, qty: it.qty, price: it.price, assignees: effective(it) }; }),
       }),
     })
       .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'Request failed'); return j; }); })

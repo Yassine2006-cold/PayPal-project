@@ -8,7 +8,7 @@ Splitting a group dinner usually means a calculator, an argument about who had t
 
 1. Upload a photo of the receipt.
 2. Google Gemini (vision, free tier) extracts the items, quantities, prices, tax and tip.
-3. You tap who shared each item. Unassigned items are split equally; tax and tip are split in proportion to what each person ordered. Amounts are computed in integer cents with the largest-remainder method, so the shares always add up exactly to the bill.
+3. You tap who shared each item. Every item is split equally between everyone by default (the **Everyone** button on each item); tap names to charge an item only to specific people, or select nobody and the item is not charged. Tax and tip are split in proportion to what each person ordered. Amounts are computed in integer cents with the largest-remainder method, so the shares always add up exactly to the bill.
 4. SplitSnap creates one **PayPal order per person** (Orders v2 API) and gives you a payment link for each.
 5. When a friend approves the payment, PayPal redirects back, the server **captures** the payment, and the live status flips to *paid*.
 
@@ -37,6 +37,14 @@ Values for `.env`:
 - `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET`: create a free developer account at developer.paypal.com, open *Apps & Credentials* in the **Sandbox** tab and create (or use the default) REST app.
 - `GEMINI_API_KEY`: a free key from aistudio.google.com/apikey, no credit card needed. If left empty, the app runs in **demo mode** with a sample receipt, so everything else still works.
 - `BASE_URL`: where PayPal sends payers back. `http://localhost:3000` works when you pay from the same machine. To share links with other devices, host the app (for example on Render) and set `BASE_URL` to its public URL.
+
+### Deploy for free on Render (hosted demo URL)
+
+1. Push this repo to GitHub.
+2. On render.com, create a free account, then **New > Web Service** and pick the repo.
+3. Build command `npm install`, start command `npm start`, instance type **Free**.
+4. Under **Environment Variables** add `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` and `GEMINI_API_KEY`. After the first deploy, also add `BASE_URL` set to your service URL (for example `https://splitsnap.onrender.com`) and redeploy so PayPal redirects payers back to it.
+5. Open the `onrender.com` URL. Free services sleep after 15 minutes without traffic and take about a minute to wake up, and bills are kept in memory, so they are cleared when the service restarts.
 
 ### Try the full payment flow
 

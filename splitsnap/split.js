@@ -20,20 +20,20 @@ function allocate(total, weights) {
 }
 
 // items: [{ qty, unitCents, assignees: [personIndex, ...] }]
-// An item with no assignees is shared equally by everyone.
+// An item with no assignees (nobody selected) is not charged to anyone.
 // Tax and tip are split in proportion to each person's subtotal.
 function computeShares({ items, taxCents, tipCents, peopleCount }) {
   const sub = new Array(peopleCount).fill(0);
-  const everyone = Array.from({ length: peopleCount }, (_, i) => i);
   for (const it of items) {
     const total = Math.round((it.qty || 1) * it.unitCents);
-    let who = Array.from(new Set((it.assignees || []).filter((p) => p >= 0 && p < peopleCount)));
-    if (who.length === 0) who = everyone;
+    const who = Array.from(new Set((it.assignees || []).filter((p) => p >= 0 && p < peopleCount)));
+    if (who.length === 0) continue; // nobody selected: this item is not charged
     const parts = allocate(total, who.map(() => 1));
     who.forEach((p, k) => (sub[p] += parts[k]));
   }
-  const tax = allocate(taxCents || 0, sub);
-  const tip = allocate(tipCents || 0, sub);
+  const anything = sub.some((x) => x > 0);
+  const tax = anything ? allocate(taxCents || 0, sub) : sub.map(() => 0);
+  const tip = anything ? allocate(tipCents || 0, sub) : sub.map(() => 0);
   return sub.map((s, i) => ({ subtotal: s, tax: tax[i], tip: tip[i], total: s + tax[i] + tip[i] }));
 }
 
