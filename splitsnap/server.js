@@ -5,18 +5,25 @@ const path = require('path');
 const crypto = require('crypto');
 const { computeShares } = require('./split');
 
-// Minimal .env loader (no dependencies)
+// Minimal .env loader (no dependencies). Tolerates a UTF-8 BOM, UTF-16 files
+// (what some Windows editors and `echo > .env` produce), "export KEY=..." and quotes.
+const ENV_PATH = path.join(__dirname, '.env');
+let envFound = false;
 try {
-  for (const line of fs.readFileSync(path.join(__dirname, '.env'), 'utf8').split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
-    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  const buf = fs.readFileSync(ENV_PATH);
+  envFound = true;
+  let text = buf[0] === 0xff && buf[1] === 0xfe ? buf.toString('utf16le') : buf.toString('utf8');
+  text = text.replace(/^﻿/, '');
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^\s*(?:export\s+)?([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
   }
 } catch {}
 
 const PORT = Number(process.env.PORT) || 3000;
 const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
 const PP_BASE = 'https://api-m.sandbox.paypal.com'; // sandbox only
-const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD'];
 
 const bills = new Map(); // id -> bill (in memory; fine for a demo)
@@ -117,7 +124,7 @@ async function createOrder(bill, personIdx) {
   return { orderId: json.id, payUrl: link && link.href };
 }
 
-// ---------- AI receipt parsing (Claude vision) ----------
+// ---------- AI receipt parsing (Google Gemini vision, free tier) ----------
 const SAMPLE = {
   demo: true,
   merchant: 'Demo Trattoria',
@@ -132,27 +139,24 @@ const SAMPLE = {
   tip: 6,
 };
 
-async function parseReceipt(dataUrl) {
-  if (!process.env.ANTHROPIC_API_KEY) return SAMPLE;
+async function parseReceipt(dataUrl, sample) {
+  if (sample) return SAMPLE;
+  if (!process.env.GEMINI_API_KEY)
+    throw Object.assign(new Error('Receipt scanning needs a free Gemini key. Add GEMINI_API_KEY to the .env file next to server.js, then stop and restart the app (npm start).'), { status: 400 });
   const m = /^data:(image\/(?:jpeg|png|webp|gif));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl || '');
   if (!m) throw Object.assign(new Error('Please upload a JPEG, PNG, WebP or GIF image.'), { status: 400 });
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(MODEL)}:generateContent`, {
     method: 'POST',
     headers: {
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
+      'x-goog-api-key': process.env.GEMINI_API_KEY,
       'content-type': 'application/json',
     },
     body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 1500,
-      messages: [
+      contents: [
         {
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } },
+          parts: [
+            { inline_data: { mime_type: m[1], data: m[2] } },
             {
-              type: 'text',
               text:
                 'Extract this restaurant/shop receipt. Reply with ONLY a JSON object: ' +
                 '{"merchant": string, "currency": ISO 4217 code (best guess from symbols), ' +
@@ -163,11 +167,13 @@ async function parseReceipt(dataUrl) {
           ],
         },
       ],
+      generationConfig: { responseMimeType: 'application/json', temperature: 0 },
     }),
   });
   const j = await r.json();
   if (!r.ok) throw Object.assign(new Error('AI parsing failed: ' + (j.error && j.error.message || r.status)), { status: 502 });
-  const text = (j.content || []).map((b) => b.text || '').join('');
+  const text = ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || [])
+    .map((x) => x.text || '').join('');
   const a = text.indexOf('{'), b = text.lastIndexOf('}');
   if (a < 0 || b < 0) throw Object.assign(new Error('Could not read the receipt. Try a clearer photo.'), { status: 422 });
   const raw = JSON.parse(text.slice(a, b + 1));
@@ -199,6 +205,7 @@ async function createBill(body) {
   }));
   if (!items.length) throw Object.assign(new Error('Add at least one item.'), { status: 400 });
 
+  const payer = Number.isInteger(Number(body.payer)) && Number(body.payer) >= 0 && Number(body.payer) < names.length ? Number(body.payer) : 0;
   const shares = computeShares({ items, taxCents: cents(body.tax), tipCents: cents(body.tip), peopleCount: names.length });
   const bill = {
     id: crypto.randomBytes(6).toString('hex'),
@@ -207,14 +214,14 @@ async function createBill(body) {
     createdAt: Date.now(),
     people: names.map((name, i) => ({
       name,
-      isOwner: i === 0, // person 0 paid the bill and is owed the money
+      isOwner: i === payer, // the person who paid the bill is owed the money
       ...shares[i],
       totalCents: shares[i].total,
-      status: i === 0 || shares[i].total === 0 ? 'owner' : 'pending',
+      status: i === payer || shares[i].total === 0 ? 'owner' : 'pending',
     })),
   };
   // Create one PayPal order per person who owes money.
-  for (let i = 1; i < bill.people.length; i++) {
+  for (let i = 0; i < bill.people.length; i++) {
     const p = bill.people[i];
     if (p.status === 'owner') continue;
     const o = await createOrder(bill, i);
@@ -246,14 +253,15 @@ async function handle(req, res) {
 
     if (req.method === 'GET' && p === '/api/config')
       return send(res, 200, {
-        ai: !!process.env.ANTHROPIC_API_KEY,
+        ai: !!process.env.GEMINI_API_KEY,
         paypal: !!(process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET),
         currencies: CURRENCIES,
+        envFound,
       });
 
     if (req.method === 'POST' && p === '/api/parse') {
       const body = await readBody(req);
-      return send(res, 200, await parseReceipt(body.image));
+      return send(res, 200, await parseReceipt(body.image, body.sample === true));
     }
 
     if (req.method === 'POST' && p === '/api/bills') {
@@ -292,6 +300,11 @@ async function handle(req, res) {
 }
 
 if (require.main === module) {
-  http.createServer(handle).listen(PORT, () => console.log(`SplitSnap running at ${BASE_URL}`));
+  http.createServer(handle).listen(PORT, () => {
+    console.log(`SplitSnap running at ${BASE_URL}`);
+    console.log(`.env file: ${envFound ? 'found' : 'NOT FOUND (expected at ' + ENV_PATH + ')'}`);
+    console.log(`PayPal credentials: ${process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET ? 'OK' : 'MISSING'}`);
+    console.log(`Gemini key: ${process.env.GEMINI_API_KEY ? 'OK' : 'MISSING'}`);
+  });
 }
 module.exports = { handle };

@@ -10,7 +10,7 @@
   body { margin:0; font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
   main { max-width:760px; margin:0 auto; padding:20px 16px 60px; }
   h1 { margin:8px 0 2px; font-size:28px; } h1 span { color:var(--brand); }
-  .sub { color:var(--mute); margin:0 0 18px; }
+  .sub { color:var(--mute); margin:0 0 14px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
   h2 { font-size:17px; margin:0 0 10px; }
   button { font:inherit; border:0; border-radius:10px; padding:10px 14px; cursor:pointer; background:var(--brand); color:#fff; }
@@ -20,13 +20,16 @@
   .item { border-top:1px solid var(--line); padding:10px 0; }
   .item:first-child { border-top:0; }
   .chips { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
-  .chip { padding:4px 10px; border-radius:999px; background:#eef2f7; color:var(--ink); font-size:14px; }
+  .chip { padding:4px 10px; border-radius:999px; background:#eef2f7; color:var(--ink); font-size:14px; border:0; cursor:pointer; }
   .chip.on { background:var(--brand); color:#fff; }
+  .chip.person { background:var(--brand); color:#fff; cursor:default; }
+  .chip .x { margin-left:6px; cursor:pointer; opacity:.85; }
   .name { flex:1 1 160px; } .num { width:84px; }
   .badge { padding:2px 10px; border-radius:999px; font-size:13px; background:#eef2f7; }
   .badge.paid { background:#dcfce7; color:var(--ok); } .badge.pending { background:#fef3c7; color:var(--warn); } .badge.failed { background:#fee2e2; color:#b91c1c; }
   .total { display:flex; justify-content:space-between; padding:6px 0; }
-  .err { color:#b91c1c; margin:8px 0 0; } .note { color:var(--mute); font-size:14px; }
+  .err { color:#b91c1c; margin:8px 0 0; } .note { color:var(--mute); font-size:14px; margin:8px 0 0; }
+  .warn { background:#fff7ed; border:1px solid #fed7aa; color:#9a3412; border-radius:10px; padding:10px 12px; margin-bottom:14px; font-size:14px; }
   .hidden { display:none; }
   .linkbox { width:100%; font-size:13px; }
 </style>
@@ -35,26 +38,34 @@
 <main>
   <h1>Split<span>Snap</span></h1>
   <p class="sub">Snap the receipt. AI reads it. Everyone gets a PayPal link for their share.</p>
-  <div id="banner" class="note"></div>
+  <div id="banner" class="warn hidden"></div>
 
   <div id="builder">
     <section class="card">
       <h2>1. Receipt</h2>
       <div class="row">
         <input type="file" id="file" accept="image/*">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="ghost" id="sample">Try a sample receipt</button>
         <button class="ghost" id="manual">Enter items manually</button>
       </div>
       <p class="note" id="parseNote"></p>
+      <p class="err" id="parseErr"></p>
     </section>
 
     <section class="card">
       <h2>2. People</h2>
-      <div class="row" id="people"></div>
+      <div class="chips" id="people"></div>
       <div class="row" style="margin-top:8px">
-        <input id="newPerson" placeholder="Add a person" maxlength="40">
+        <input id="newPerson" placeholder="Name of a person" maxlength="40">
         <button class="ghost" id="addPerson">Add</button>
       </div>
-      <p class="note">The first person paid the bill and receives the money.</p>
+      <div class="row hidden" id="payerRow" style="margin-top:10px">
+        <label for="payer">Who paid the bill?</label>
+        <select id="payer"></select>
+      </div>
+      <p class="note">Add everyone at the table. The person who paid is the one who gets the money back.</p>
     </section>
 
     <section class="card">
@@ -84,163 +95,250 @@
     <h2 id="resTitle"></h2>
     <div id="resList"></div>
     <p class="note">Sandbox mode: pay with a PayPal sandbox personal account. Status updates automatically.</p>
-    <button class="ghost" id="again">Split another bill</button>
+    <button class="ghost" id="again" style="margin-top:10px">Split another bill</button>
   </section>
 </main>
 
 <script src="/split.js"></script>
 <script>
-(() => {
-  const $ = (id) => document.getElementById(id);
-  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
-  const state = { people: ['Me', 'Friend 1'], items: [], config: {} };
-  let poll = null;
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  var state = { people: [], payer: 0, items: [], config: { currencies: ['USD'] } };
+  var poll = null;
 
-  const money = (c) => (c / 100).toFixed(2) + ' ' + $('currency').value;
-  const toCents = (x) => Math.max(0, Math.round(Number(x) * 100) || 0);
+  function toCents(x) { return Math.max(0, Math.round(Number(x) * 100) || 0); }
+  function money(c) { return (c / 100).toFixed(2) + ' ' + $('currency').value; }
 
+  // ----- people -----
   function renderPeople() {
-    $('people').innerHTML = state.people.map((n, i) =>
-      `<span class="chip on">${esc(n)}${i > 1 ? ` <a href="#" data-rm="${i}" style="color:#fff">×</a>` : ''}</span>`).join('');
-    $('people').querySelectorAll('[data-rm]').forEach((a) => a.onclick = (e) => {
-      e.preventDefault();
-      const i = Number(a.dataset.rm);
-      state.people.splice(i, 1);
-      state.items.forEach((it) => it.assignees = it.assignees.filter((p) => p !== i).map((p) => p > i ? p - 1 : p));
-      renderAll();
+    $('people').innerHTML = state.people.length
+      ? state.people.map(function (n, i) {
+          return '<span class="chip person">' + esc(n) + '<span class="x" data-rm="' + i + '" title="Remove">×</span></span>';
+        }).join('')
+      : '<span class="note" style="margin:0">Nobody yet. Add the people sharing this bill.</span>';
+    Array.prototype.forEach.call($('people').querySelectorAll('[data-rm]'), function (x) {
+      x.onclick = function () { removePerson(Number(x.getAttribute('data-rm'))); };
     });
+    $('payerRow').classList.toggle('hidden', state.people.length < 2);
+    $('payer').innerHTML = state.people.map(function (n, i) {
+      return '<option value="' + i + '"' + (i === state.payer ? ' selected' : '') + '>' + esc(n) + '</option>';
+    }).join('');
   }
 
+  function addPerson() {
+    var v = $('newPerson').value.trim().slice(0, 40);
+    if (!v) return;
+    if (state.people.length >= 12) return;
+    state.people.push(v);
+    $('newPerson').value = '';
+    renderAll();
+    $('newPerson').focus();
+  }
+
+  function removePerson(i) {
+    state.people.splice(i, 1);
+    if (state.payer >= state.people.length) state.payer = 0;
+    else if (state.payer > i) state.payer -= 1;
+    state.items.forEach(function (it) {
+      it.assignees = it.assignees.filter(function (p) { return p !== i; }).map(function (p) { return p > i ? p - 1 : p; });
+    });
+    renderAll();
+  }
+
+  // ----- items -----
   function renderItems() {
-    $('items').innerHTML = state.items.map((it, k) => `
-      <div class="item">
-        <div class="row">
-          <input class="name" data-k="${k}" data-f="name" value="${esc(it.name)}" maxlength="80">
-          <input class="num" data-k="${k}" data-f="qty" type="number" min="1" step="1" value="${it.qty}" title="Quantity">
-          <input class="num" data-k="${k}" data-f="price" type="number" min="0" step="0.01" value="${it.price}" title="Unit price">
-          <button class="ghost" data-del="${k}">✕</button>
-        </div>
-        <div class="chips">${state.people.map((n, i) =>
-          `<button class="chip ${it.assignees.includes(i) ? 'on' : ''}" data-k="${k}" data-p="${i}">${esc(n)}</button>`).join('')}</div>
-      </div>`).join('') || '<p class="note">No items yet.</p>';
-    $('items').querySelectorAll('input').forEach((el) => el.oninput = () => {
-      const it = state.items[el.dataset.k], f = el.dataset.f;
-      it[f] = f === 'name' ? el.value : Number(el.value) || 0;
-      renderShares();
-    });
-    $('items').querySelectorAll('[data-del]').forEach((b) => b.onclick = () => { state.items.splice(Number(b.dataset.del), 1); renderAll(); });
-    $('items').querySelectorAll('[data-p]').forEach((b) => b.onclick = () => {
-      const it = state.items[b.dataset.k], p = Number(b.dataset.p);
-      it.assignees = it.assignees.includes(p) ? it.assignees.filter((x) => x !== p) : [...it.assignees, p];
-      renderAll();
+    var box = $('items');
+    box.innerHTML = '';
+    if (!state.items.length) {
+      box.innerHTML = '<p class="note" style="margin:0">No items yet. Scan a receipt or add items by hand.</p>';
+      return;
+    }
+    state.items.forEach(function (it, k) {
+      var wrap = document.createElement('div');
+      wrap.className = 'item';
+      var row = document.createElement('div');
+      row.className = 'row';
+
+      var name = document.createElement('input');
+      name.className = 'name'; name.maxLength = 80; name.value = it.name; name.placeholder = 'Item';
+      name.oninput = function () { it.name = name.value; };
+
+      var qty = document.createElement('input');
+      qty.className = 'num'; qty.type = 'number'; qty.min = '1'; qty.step = '1'; qty.value = it.qty; qty.title = 'Quantity';
+      qty.oninput = function () { it.qty = Math.max(1, Math.round(Number(qty.value) || 1)); renderShares(); };
+
+      var price = document.createElement('input');
+      price.className = 'num'; price.type = 'number'; price.min = '0'; price.step = '0.01'; price.value = it.price; price.title = 'Unit price';
+      price.oninput = function () { it.price = Number(price.value) || 0; renderShares(); };
+
+      var del = document.createElement('button');
+      del.className = 'ghost'; del.textContent = '✕'; del.title = 'Remove item';
+      del.onclick = function () { state.items.splice(k, 1); renderAll(); };
+
+      row.appendChild(name); row.appendChild(qty); row.appendChild(price); row.appendChild(del);
+      wrap.appendChild(row);
+
+      var chips = document.createElement('div');
+      chips.className = 'chips';
+      state.people.forEach(function (n, i) {
+        var b = document.createElement('button');
+        b.className = 'chip' + (it.assignees.indexOf(i) >= 0 ? ' on' : '');
+        b.textContent = n;
+        b.onclick = function () {
+          var at = it.assignees.indexOf(i);
+          if (at >= 0) it.assignees.splice(at, 1); else it.assignees.push(i);
+          renderAll();
+        };
+        chips.appendChild(b);
+      });
+      wrap.appendChild(chips);
+      box.appendChild(wrap);
     });
   }
 
-  function shares() {
-    return Split.computeShares({
-      items: state.items.map((it) => ({ qty: it.qty, unitCents: toCents(it.price), assignees: it.assignees })),
-      taxCents: toCents($('tax').value), tipCents: toCents($('tip').value), peopleCount: state.people.length,
-    });
-  }
-
+  // ----- shares -----
   function renderShares() {
-    const s = shares();
-    $('shares').innerHTML = state.people.map((n, i) =>
-      `<div class="total"><span>${esc(n)}${i === 0 ? ' <span class="note">(paid)</span>' : ''}</span><strong>${money(s[i].total)}</strong></div>`).join('') +
-      `<div class="total"><span class="note">Bill total</span><span class="note">${money(s.reduce((a, x) => a + x.total, 0))}</span></div>`;
+    var n = state.people.length;
+    if (n === 0) { $('shares').innerHTML = '<p class="note" style="margin:0">Add people to see each share.</p>'; return; }
+    var s = Split.computeShares({
+      items: state.items.map(function (it) { return { qty: it.qty, unitCents: toCents(it.price), assignees: it.assignees }; }),
+      taxCents: toCents($('tax').value), tipCents: toCents($('tip').value), peopleCount: n,
+    });
+    var sum = 0;
+    var html = state.people.map(function (name, i) {
+      sum += s[i].total;
+      return '<div class="total"><span>' + esc(name) + (n > 1 && i === state.payer ? ' <span class="note">(paid)</span>' : '') +
+        '</span><strong>' + money(s[i].total) + '</strong></div>';
+    }).join('');
+    $('shares').innerHTML = html + '<div class="total"><span class="note">Bill total</span><span class="note">' + money(sum) + '</span></div>';
   }
 
   function renderAll() { renderPeople(); renderItems(); renderShares(); }
 
+  // ----- receipt scanning -----
   function fileToDataUrl(file) {
-    return new Promise((resolve, reject) => {
-      const img = new Image(), fr = new FileReader();
-      fr.onload = () => { img.src = fr.result; };
-      img.onload = () => {
-        const sc = Math.min(1, 1600 / Math.max(img.width, img.height));
-        const c = document.createElement('canvas');
+    return new Promise(function (resolve, reject) {
+      var img = new Image(), fr = new FileReader();
+      fr.onload = function () { img.src = fr.result; };
+      img.onload = function () {
+        var sc = Math.min(1, 1600 / Math.max(img.width, img.height));
+        var c = document.createElement('canvas');
         c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
-        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        var ctx = c.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0, c.width, c.height);
         resolve(c.toDataURL('image/jpeg', 0.85));
       };
-      img.onerror = fr.onerror = () => reject(new Error('Could not read that image.'));
+      img.onerror = fr.onerror = function () { reject(new Error('Could not read that image.')); };
       fr.readAsDataURL(file);
     });
   }
 
-  $('file').onchange = async (e) => {
-    const f = e.target.files[0]; if (!f) return;
-    $('parseNote').textContent = 'Reading receipt with AI…'; $('err').textContent = '';
-    try {
-      const image = await fileToDataUrl(f);
-      const r = await fetch('/api/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image }) });
-      const j = await r.json(); if (!r.ok) throw new Error(j.error);
-      state.items = j.items.map((it) => ({ name: it.name, qty: it.qty, price: it.price, assignees: [] }));
-      $('tax').value = j.tax; $('tip').value = j.tip;
-      if (j.currency) $('currency').value = j.currency;
-      if (j.merchant) $('title').value = j.merchant;
-      $('parseNote').textContent = j.demo
-        ? 'No ANTHROPIC_API_KEY set: loaded a demo receipt. Add a key to read real photos.'
-        : `Found ${j.items.length} items. Check them and assign people.`;
-      renderAll();
-    } catch (err) { $('parseNote').textContent = ''; $('err').textContent = err.message; }
-  };
-
-  $('manual').onclick = () => { if (!state.items.length) state.items.push({ name: '', qty: 1, price: 0, assignees: [] }); renderAll(); };
-  $('addItem').onclick = () => { state.items.push({ name: '', qty: 1, price: 0, assignees: [] }); renderAll(); };
-  $('addPerson').onclick = () => {
-    const v = $('newPerson').value.trim().slice(0, 40);
-    if (v && state.people.length < 12) { state.people.push(v); $('newPerson').value = ''; renderAll(); }
-  };
-  $('newPerson').onkeydown = (e) => { if (e.key === 'Enter') $('addPerson').click(); };
-  $('tax').oninput = $('tip').oninput = renderShares;
-  $('currency').onchange = renderShares;
-
-  $('create').onclick = async () => {
-    $('err').textContent = ''; $('create').disabled = true;
-    try {
-      const r = await fetch('/api/bills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-        title: $('title').value, currency: $('currency').value, people: state.people, tax: Number($('tax').value) || 0,
-        tip: Number($('tip').value) || 0, items: state.items,
-      }) });
-      const j = await r.json(); if (!r.ok) throw new Error(j.error);
-      history.replaceState(null, '', '/?bill=' + j.id);
-      showBill(j.id);
-    } catch (err) { $('err').textContent = err.message; }
-    $('create').disabled = false;
-  };
-
-  async function showBill(id) {
-    const r = await fetch('/api/bills/' + id);
-    if (!r.ok) { history.replaceState(null, '', '/'); return; }
-    const b = await r.json();
-    $('builder').classList.add('hidden'); $('result').classList.remove('hidden');
-    $('resTitle').textContent = b.title;
-    const cur = b.currency;
-    $('resList').innerHTML = b.people.map((p) => {
-      const label = p.isOwner ? 'paid the bill' : p.status;
-      const cls = p.status === 'paid' ? 'paid' : p.status === 'pending' ? 'pending' : p.status === 'failed' ? 'failed' : '';
-      return `<div class="item"><div class="total"><span>${esc(p.name)}</span><span><strong>${(p.totalCents / 100).toFixed(2)} ${esc(cur)}</strong> <span class="badge ${cls}">${esc(label)}</span></span></div>` +
-        (p.payUrl ? `<div class="row"><input class="linkbox" readonly value="${esc(p.payUrl)}"><button class="ghost" data-copy="${esc(p.payUrl)}">Copy</button><a href="${esc(p.payUrl)}" target="_blank" rel="noopener"><button>Pay</button></a></div>` : '') + '</div>';
-    }).join('');
-    $('resList').querySelectorAll('[data-copy]').forEach((btn) => btn.onclick = () => { navigator.clipboard.writeText(btn.dataset.copy); btn.textContent = 'Copied'; });
-    clearTimeout(poll);
-    if (b.people.some((p) => p.status === 'pending')) poll = setTimeout(() => showBill(id), 4000);
+  function applyParsed(j) {
+    state.items = (j.items || []).map(function (it) {
+      return { name: it.name, qty: it.qty, price: it.price, assignees: [] };
+    });
+    $('tax').value = j.tax || 0;
+    $('tip').value = j.tip || 0;
+    if (j.currency && state.config.currencies.indexOf(j.currency) >= 0) $('currency').value = j.currency;
+    if (j.merchant) $('title').value = j.merchant;
+    $('parseNote').textContent = (j.demo ? 'Sample receipt loaded. ' : 'Receipt read by AI. ') +
+      state.items.length + ' items found. Check them, then tap names to assign.';
+    renderAll();
   }
 
-  $('again').onclick = () => { location.href = '/'; };
+  function callParse(payload) {
+    $('parseErr').textContent = '';
+    $('parseNote').textContent = 'Reading receipt with AI…';
+    return fetch('/api/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'Request failed'); return j; }); })
+      .then(applyParsed)
+      .catch(function (err) { $('parseNote').textContent = ''; $('parseErr').textContent = err.message; });
+  }
 
-  (async () => {
-    state.config = await (await fetch('/api/config')).json();
-    $('currency').innerHTML = state.config.currencies.map((c) => `<option>${c}</option>`).join('');
-    const warn = [];
-    if (!state.config.paypal) warn.push('PayPal sandbox credentials are missing (see README).');
-    if (!state.config.ai) warn.push('AI key missing: receipt scan runs in demo mode.');
-    $('banner').textContent = warn.join(' ');
+  $('file').onchange = function (e) {
+    var f = e.target.files[0];
+    if (!f) return;
+    fileToDataUrl(f)
+      .then(function (image) { return callParse({ image: image }); })
+      .catch(function (err) { $('parseNote').textContent = ''; $('parseErr').textContent = err.message; });
+  };
+  $('sample').onclick = function () { callParse({ sample: true }); };
+  $('manual').onclick = function () {
+    if (!state.items.length) state.items.push({ name: '', qty: 1, price: 0, assignees: [] });
     renderAll();
-    const id = new URLSearchParams(location.search).get('bill');
+  };
+  $('addItem').onclick = function () { state.items.push({ name: '', qty: 1, price: 0, assignees: [] }); renderAll(); };
+  $('addPerson').onclick = addPerson;
+  $('newPerson').onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); addPerson(); } };
+  $('payer').onchange = function () { state.payer = Number($('payer').value) || 0; renderShares(); };
+  $('tax').oninput = renderShares;
+  $('tip').oninput = renderShares;
+  $('currency').onchange = renderShares;
+
+  // ----- create PayPal requests -----
+  $('create').onclick = function () {
+    $('err').textContent = '';
+    if (state.people.length < 2) { $('err').textContent = 'Add at least two people first.'; return; }
+    if (!state.items.length) { $('err').textContent = 'Add or scan some items first.'; return; }
+    $('create').disabled = true;
+    fetch('/api/bills', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: $('title').value, currency: $('currency').value, people: state.people, payer: state.payer,
+        tax: Number($('tax').value) || 0, tip: Number($('tip').value) || 0, items: state.items,
+      }),
+    })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'Request failed'); return j; }); })
+      .then(function (j) { history.replaceState(null, '', '/?bill=' + j.id); return showBill(j.id); })
+      .catch(function (err) { $('err').textContent = err.message; })
+      .then(function () { $('create').disabled = false; });
+  };
+
+  function showBill(id) {
+    return fetch('/api/bills/' + id).then(function (r) {
+      if (!r.ok) { history.replaceState(null, '', '/'); return; }
+      return r.json().then(function (b) {
+        $('builder').classList.add('hidden'); $('result').classList.remove('hidden');
+        $('resTitle').textContent = b.title;
+        $('resList').innerHTML = b.people.map(function (p) {
+          var label = p.isOwner ? 'paid the bill' : p.status;
+          var cls = p.status === 'paid' ? 'paid' : p.status === 'pending' ? 'pending' : p.status === 'failed' ? 'failed' : '';
+          return '<div class="item"><div class="total"><span>' + esc(p.name) + '</span><span><strong>' +
+            (p.totalCents / 100).toFixed(2) + ' ' + esc(b.currency) + '</strong> <span class="badge ' + cls + '">' + esc(label) + '</span></span></div>' +
+            (p.payUrl ? '<div class="row"><input class="linkbox" readonly value="' + esc(p.payUrl) + '"><button class="ghost" data-copy="' + esc(p.payUrl) +
+              '">Copy</button><a href="' + esc(p.payUrl) + '" target="_blank" rel="noopener"><button>Pay</button></a></div>' : '') + '</div>';
+        }).join('');
+        Array.prototype.forEach.call($('resList').querySelectorAll('[data-copy]'), function (btn) {
+          btn.onclick = function () { navigator.clipboard.writeText(btn.getAttribute('data-copy')); btn.textContent = 'Copied'; };
+        });
+        clearTimeout(poll);
+        if (b.people.some(function (p) { return p.status === 'pending'; })) poll = setTimeout(function () { showBill(id); }, 4000);
+      });
+    });
+  }
+
+  $('again').onclick = function () { location.href = '/'; };
+
+  // ----- start -----
+  fetch('/api/config').then(function (r) { return r.json(); }).then(function (c) {
+    state.config = c;
+    $('currency').innerHTML = c.currencies.map(function (x) { return '<option>' + x + '</option>'; }).join('');
+    var warn = [];
+    if (!c.paypal) warn.push('PayPal credentials not detected. Put PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET in the .env file (named exactly ".env", next to server.js), then stop the app with Ctrl+C and run npm start again.');
+    if (!c.ai) warn.push('Gemini key not detected, so receipts cannot be scanned yet. Put GEMINI_API_KEY in the .env file and restart the app.');
+    if (!c.envFound) warn.push('No .env file was found at all.');
+    $('banner').innerHTML = warn.map(esc).join('<br><br>');
+    $('banner').classList.toggle('hidden', warn.length === 0);
+    renderAll();
+    var id = new URLSearchParams(location.search).get('bill');
     if (id) showBill(id);
-  })();
+  });
 })();
 </script>
 </body>

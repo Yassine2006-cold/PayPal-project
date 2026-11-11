@@ -7,7 +7,7 @@ Built for the *Build What's Next with PayPal and AI* hackathon (category: Money 
 Splitting a group dinner usually means a calculator, an argument about who had the wine, and weeks of "did you pay me yet?". SplitSnap turns that into one flow:
 
 1. Upload a photo of the receipt.
-2. Claude (vision) extracts the items, quantities, prices, tax and tip.
+2. Google Gemini (vision, free tier) extracts the items, quantities, prices, tax and tip.
 3. You tap who shared each item. Unassigned items are split equally; tax and tip are split in proportion to what each person ordered. Amounts are computed in integer cents with the largest-remainder method, so the shares always add up exactly to the bill.
 4. SplitSnap creates one **PayPal order per person** (Orders v2 API) and gives you a payment link for each.
 5. When a friend approves the payment, PayPal redirects back, the server **captures** the payment, and the live status flips to *paid*.
@@ -17,7 +17,7 @@ Splitting a group dinner usually means a calculator, an argument about who had t
 | | What it does |
 |---|---|
 | **PayPal Orders v2 (sandbox)** | `POST /v2/checkout/orders` creates a payment request for each person's exact share; `POST /v2/checkout/orders/{id}/capture` settles it after approval. Idempotency keys (`PayPal-Request-Id`) prevent duplicate orders and captures. |
-| **Claude vision (Anthropic Messages API)** | Reads the receipt photo and returns structured JSON (merchant, currency, items, tax, tip). Model: `claude-sonnet-5-5`. |
+| **Google Gemini vision (free tier)** | Reads the receipt photo and returns structured JSON (merchant, currency, items, tax, tip) through the Gemini API `generateContent` endpoint. Default model: `gemini-3.5-flash-lite`, configurable with `GEMINI_MODEL`. |
 
 No third-party libraries: the server uses only Node's standard library and the built-in `fetch`.
 
@@ -35,7 +35,7 @@ npm start                 # http://localhost:3000
 Values for `.env`:
 
 - `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET`: create a free developer account at developer.paypal.com, open *Apps & Credentials* in the **Sandbox** tab and create (or use the default) REST app.
-- `ANTHROPIC_API_KEY`: from console.anthropic.com. If left empty, the app runs in **demo mode** with a sample receipt, so everything else still works.
+- `GEMINI_API_KEY`: a free key from aistudio.google.com/apikey, no credit card needed. If left empty, the app runs in **demo mode** with a sample receipt, so everything else still works.
 - `BASE_URL`: where PayPal sends payers back. `http://localhost:3000` works when you pay from the same machine. To share links with other devices, host the app (for example on Render) and set `BASE_URL` to its public URL.
 
 ### Try the full payment flow
@@ -64,7 +64,7 @@ Covers the split maths (rounding, shared items, proportional tax and tip).
 
 - Sandbox only. Bills are kept in memory and disappear when the server restarts.
 - Supported currencies: USD, EUR, GBP, CAD, AUD (two-decimal currencies).
-- The first person in the list is the one who paid the bill and receives the money (the PayPal sandbox business account tied to your REST app).
+- You add the people yourself and pick who paid the bill. Everyone else gets a PayPal payment request, and the money lands in the PayPal sandbox business account tied to your REST app.
 
 ## License
 
