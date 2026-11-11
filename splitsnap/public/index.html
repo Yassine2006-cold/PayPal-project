@@ -62,10 +62,10 @@
         <button class="ghost" id="addPerson">Add</button>
       </div>
       <div class="row hidden" id="payerRow" style="margin-top:10px">
-        <label for="payer">Who paid the bill?</label>
+        <label for="payer">Already paid, no link needed:</label>
         <select id="payer"></select>
       </div>
-      <p class="note">Add everyone at the table. The person who paid is the one who gets the money back.</p>
+      <p class="note">Add everyone at the table. Everyone gets their own PayPal link, unless you mark someone as already paid.</p>
     </section>
 
     <section class="card">
@@ -108,7 +108,7 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
-  var state = { people: [], payer: 0, items: [], config: { currencies: ['USD'] } };
+  var state = { people: [], payer: -1, items: [], config: { currencies: ['USD'] } };
   var poll = null;
 
   function toCents(x) { return Math.max(0, Math.round(Number(x) * 100) || 0); }
@@ -125,9 +125,10 @@
       x.onclick = function () { removePerson(Number(x.getAttribute('data-rm'))); };
     });
     $('payerRow').classList.toggle('hidden', state.people.length < 2);
-    $('payer').innerHTML = state.people.map(function (n, i) {
-      return '<option value="' + i + '"' + (i === state.payer ? ' selected' : '') + '>' + esc(n) + '</option>';
-    }).join('');
+    $('payer').innerHTML = '<option value="-1"' + (state.payer === -1 ? ' selected' : '') + '>Nobody, everyone gets a link</option>' +
+      state.people.map(function (n, i) {
+        return '<option value="' + i + '"' + (i === state.payer ? ' selected' : '') + '>' + esc(n) + '</option>';
+      }).join('');
   }
 
   function addPerson() {
@@ -142,7 +143,7 @@
 
   function removePerson(i) {
     state.people.splice(i, 1);
-    if (state.payer >= state.people.length) state.payer = 0;
+    if (state.payer === i) state.payer = -1;
     else if (state.payer > i) state.payer -= 1;
     state.items.forEach(function (it) {
       it.assignees = it.assignees.filter(function (p) { return p !== i; }).map(function (p) { return p > i ? p - 1 : p; });
@@ -212,7 +213,7 @@
     var sum = 0;
     var html = state.people.map(function (name, i) {
       sum += s[i].total;
-      return '<div class="total"><span>' + esc(name) + (n > 1 && i === state.payer ? ' <span class="note">(paid)</span>' : '') +
+      return '<div class="total"><span>' + esc(name) + (i === state.payer ? ' <span class="note">(already paid)</span>' : '') +
         '</span><strong>' + money(s[i].total) + '</strong></div>';
     }).join('');
     $('shares').innerHTML = html + '<div class="total"><span class="note">Bill total</span><span class="note">' + money(sum) + '</span></div>';
@@ -276,7 +277,7 @@
   $('addItem').onclick = function () { state.items.push({ name: '', qty: 1, price: 0, assignees: [] }); renderAll(); };
   $('addPerson').onclick = addPerson;
   $('newPerson').onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); addPerson(); } };
-  $('payer').onchange = function () { state.payer = Number($('payer').value) || 0; renderShares(); };
+  $('payer').onchange = function () { state.payer = Number($('payer').value); renderShares(); };
   $('tax').oninput = renderShares;
   $('tip').oninput = renderShares;
   $('currency').onchange = renderShares;
@@ -307,7 +308,7 @@
         $('builder').classList.add('hidden'); $('result').classList.remove('hidden');
         $('resTitle').textContent = b.title;
         $('resList').innerHTML = b.people.map(function (p) {
-          var label = p.isOwner ? 'paid the bill' : p.status;
+          var label = p.status === 'owner' ? 'already paid' : p.status === 'nothing' ? 'nothing to pay' : p.status;
           var cls = p.status === 'paid' ? 'paid' : p.status === 'pending' ? 'pending' : p.status === 'failed' ? 'failed' : '';
           return '<div class="item"><div class="total"><span>' + esc(p.name) + '</span><span><strong>' +
             (p.totalCents / 100).toFixed(2) + ' ' + esc(b.currency) + '</strong> <span class="badge ' + cls + '">' + esc(label) + '</span></span></div>' +

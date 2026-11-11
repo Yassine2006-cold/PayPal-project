@@ -64,7 +64,7 @@ Covers the split maths (rounding, shared items, proportional tax and tip).
 
 - Sandbox only. Bills are kept in memory and disappear when the server restarts.
 - Supported currencies: USD, EUR, GBP, CAD, AUD (two-decimal currencies).
-- You add the people yourself and pick who paid the bill. Everyone else gets a PayPal payment request, and the money lands in the PayPal sandbox business account tied to your REST app.
+- You add the people yourself. Everyone gets their own PayPal payment link (you can optionally mark someone as already paid to skip theirs). The money lands in the PayPal sandbox business account tied to your REST app.
 
 ## License
 

@@ -205,7 +205,9 @@ async function createBill(body) {
   }));
   if (!items.length) throw Object.assign(new Error('Add at least one item.'), { status: 400 });
 
-  const payer = Number.isInteger(Number(body.payer)) && Number(body.payer) >= 0 && Number(body.payer) < names.length ? Number(body.payer) : 0;
+  // Optional: someone who already settled their share and needs no link. Default: nobody, everyone gets a link.
+  const payerN = Number(body.payer);
+  const payer = body.payer !== '' && body.payer != null && Number.isInteger(payerN) && payerN >= 0 && payerN < names.length ? payerN : -1;
   const shares = computeShares({ items, taxCents: cents(body.tax), tipCents: cents(body.tip), peopleCount: names.length });
   const bill = {
     id: crypto.randomBytes(6).toString('hex'),
@@ -214,16 +216,16 @@ async function createBill(body) {
     createdAt: Date.now(),
     people: names.map((name, i) => ({
       name,
-      isOwner: i === payer, // the person who paid the bill is owed the money
+      isOwner: i === payer, // optional: this person already paid, so no link
       ...shares[i],
       totalCents: shares[i].total,
-      status: i === payer || shares[i].total === 0 ? 'owner' : 'pending',
+      status: i === payer ? 'owner' : shares[i].total === 0 ? 'nothing' : 'pending',
     })),
   };
   // Create one PayPal order per person who owes money.
   for (let i = 0; i < bill.people.length; i++) {
     const p = bill.people[i];
-    if (p.status === 'owner') continue;
+    if (p.status !== 'pending') continue;
     const o = await createOrder(bill, i);
     p.orderId = o.orderId;
     p.payUrl = o.payUrl;
@@ -307,4 +309,4 @@ if (require.main === module) {
     console.log(`Gemini key: ${process.env.GEMINI_API_KEY ? 'OK' : 'MISSING'}`);
   });
 }
-module.exports = { handle };
+module.exports = { handle, createBill };
